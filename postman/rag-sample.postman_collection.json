@@ -1,0 +1,102 @@
+{
+	"info": {
+		"_postman_id": "0645cd29-189c-40b2-a470-d1962bc02760",
+		"name": "rag-sample",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "4950826",
+		"_collection_link": "https://bold-sunset-56924.postman.co/workspace/weaviate~79da378b-2b4b-4f23-847d-2bdee95c86b8/collection/4950826-0645cd29-189c-40b2-a470-d1962bc02760?action=share&source=collection_link&creator=4950826"
+	},
+	"item": [
+		{
+			"name": "embed",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.environment.set(\"vector\", pm.response.json().embedding);"
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				},
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "noauth"
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"text\": \"{{text}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://18.221.54.42:8002/embed",
+					"protocol": "http",
+					"host": [
+						"18",
+						"221",
+						"54",
+						"42"
+					],
+					"port": "8002",
+					"path": [
+						"embed"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Add Object",
+			"request": {
+				"auth": {
+					"type": "noauth"
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"class\": \"Kb\",\n  \"properties\": {\n    \"text\": \"{{text}}\"\n  },\n  \"vector\": [{{vector}}]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://18.221.54.42:8000/v1/objects",
+					"protocol": "http",
+					"host": [
+						"18",
+						"221",
+						"54",
+						"42"
+					],
+					"port": "8000",
+					"path": [
+						"v1",
+						"objects"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

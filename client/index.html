@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RAG Test</title>
+</head>
+<body>
+  <h2>RAG Demo</h2>
+  <label>
+    Server IP:
+    <input type="text" id="serverIpInput" style="width: 180px;" />
+  </label>
+  <br><br>
+  <input type="text" id="queryInput" placeholder="Enter your question..." style="width: 300px;" />
+  <button onclick="runRAG()">Run RAG Query</button>
+  <pre id="output"></pre>
+
+  <script>
+    
+
+    async function runRAG() {
+      const output = document.getElementById('output');
+      const queryInput = document.getElementById('queryInput');
+      const queryText = queryInput.value.trim();
+      const serverIpInput = document.getElementById('serverIpInput');
+      const SERVER_IP = serverIpInput.value.trim();
+
+      if (!queryText) {
+        output.textContent = "❌ Please enter a question.";
+        return;
+      }
+
+      output.textContent = "Running RAG pipeline...\n";
+
+      try {
+        // Step 1: Get embedding vector
+        const embedRes = await fetch(`http://${SERVER_IP}:8002/embed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: queryText })
+        });
+        const embedData = await embedRes.json();
+        // If embeddings are missing or empty, use an empty string as vector
+        const vector = (embedData.embedding && Array.isArray(embedData.embedding))
+          ? embedData.embedding
+          : [];
+        console.log(embedData);
+        // Step 2: Vector search in Weaviate
+        const graphqlQuery = {
+          query: `{ Get { Kb(nearVector: { vector: [${vector}], certainty: 0.7 }) { text } } }`
+        };
+
+        const graphqlRes = await fetch(`http://${SERVER_IP}:8000/v1/graphql`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(graphqlQuery)
+        });
+
+        const graphqlData = await graphqlRes.json();
+        const docs = graphqlData.data?.Get?.Kb || [];
+        const context = docs.map(d => d.text).join("\n");
+
+        // Step 3: Send to LLM
+        const llmPayload = {
+          messages: [
+            { role: "system", content: "You are a helpful assistant using retrieved knowledge." },
+            { role: "user", content: `Context: ${context}\n\nQuestion: ${queryText}` }
+          ]
+        };
+
+        const chatRes = await fetch(`http://${SERVER_IP}:8001/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(llmPayload)
+        });
+
+        const chatData = await chatRes.json();
+        output.textContent = "✅ LLM Response:\n\n" + chatData.response;
+
+      } catch (err) {
+        output.textContent = "❌ Error: " + err.message;
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>

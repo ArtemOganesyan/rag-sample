@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Llama with RAG deployment
+
+Parameters:
+  HostName:
+    Description: Hostname
+    Type: String
+    Default: llama-rag-server
+  HostType:
+    Description: Server Type
+    Type: String
+    Default: g5.xlarge
+  CIDR:
+    Description: CIDR block
+    Type: String
+    Default: 192.168.1.0/24
+  SubnetCIDR:
+    Description: Subnet 
+    Type: String
+    Default: 192.168.1.0/24
+  AZ1:
+    Description: Availability zone
+    Type: String
+    Default: us-east-2a
+  KeyName:
+    Description: Key name
+    Type: String
+    Default: rag-key
+  ImageId:
+        Description: AMI image ID
+        Type: String
+        Default: ami-04f167a56786e4b09
+
+Resources:
+  MainVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref CIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  Subnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MainVPC
+      CidrBlock: !Ref SubnetCIDR
+      AvailabilityZone: !Ref AZ1
+      MapPublicIpOnLaunch: true
+
+  MainInternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+        VpcId: !Ref MainVPC
+        InternetGatewayId: !Ref MainInternetGateway
+
+  DefaultRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+        VpcId: !Ref MainVPC
+
+  DefaultRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref DefaultRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MainInternetGateway
+
+  Subnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref DefaultRouteTable
+      SubnetId: !Ref Subnet
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+  
+  ServersSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: HTTP, SSH
+      VpcId: !Ref MainVPC
+      SecurityGroupIngress:                           
+      - IpProtocol: tcp
+        FromPort: 22                                  
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8000                                  
+        ToPort: 8000
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8001
+        ToPort: 8001
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8002
+        ToPort: 8002
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:                            
+      - IpProtocol: tcp
+        FromPort: 0                                   
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+
+  InstanceProfile: 
+      Type: 'AWS::IAM::InstanceProfile'
+      Properties: 
+        Path: "/"
+        Roles: 
+          - !Ref InstanceRole
+
+  InstancePolicy:
+      Type: 'AWS::IAM::Policy'
+      Properties:
+        PolicyName: root
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: '*'
+              Resource: '*'
+        Roles:
+          - !Ref InstanceRole
+
+  Instance: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: !Ref ImageId
+      KeyName: !Ref KeyName                            
+      InstanceType: !Ref HostType
+      BlockDeviceMappings: 
+        - DeviceName: "/dev/sda1"
+          Ebs: 
+            VolumeType: "gp2"
+            Encrypted: false
+            DeleteOnTermination: true
+            VolumeSize: 60
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: true
+        DeviceIndex: "0"
+        GroupSet: 
+          - !Ref ServersSecurityGroup                
+        SubnetId: !Ref Subnet           
+      IamInstanceProfile: !Ref InstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Ref HostName
+      UserData:                                         
+        Fn::Base64:
+            !Sub |
+                #!/bin/bash -x
+                exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+                echo 'Configuration started.'
+                date '+%Y-%m-%d %H:%M:%S'
+
+                apt update && sudo apt upgrade -y
+                apt install -y docker.io docker-compose python3 python3-pip python3-venv git build-essential dkms
+                systemctl enable docker --now
+                systemctl restart docker
+                cd /home/ubuntu
+                git clone https://github.com/ArtemOganesyan/rag-sample.git
+
+                mkdir /home/ubuntu/nvidia
+                cd /home/ubuntu/nvidia
+                wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-ubuntu2404.pin
+                mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
+                apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub
+                add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/ /"
+                apt update
+                apt install -y cuda-drivers
+                cd /home/ubuntu/rag-sample/weaviate
+                docker-compose up -d
+                cd /home/ubuntu/rag-sample/hermes-llama
+                python3 -m venv venv
+                source venv/bin/activate
+                pip install huggingface_hub fastapi pydantic torch transformers uvicorn bitsandbytes accelerate
+                python model_download.py
+                deactivate
+
+                cd /home/ubuntu/rag-sample/embedder
+                python3 -m venv venv
+                source venv/bin/activate
+                pip install fastapi pydantic sentence_transformers uvicorn
+                deactivate
+
+                chmod +x /home/ubuntu/rag-sample/hermes-llama/start_server.sh
+                chmod +x /home/ubuntu/rag-sample/embedder/start_server.sh
+                (crontab -l 2>/dev/null; echo '@reboot /home/ubuntu/rag-sample/hermes-llama/start_server.sh > /home/ubuntu/rag-sample/hermes-llama/hermes.log 2>&1 &') | crontab -
+                (crontab -l 2>/dev/null; echo '@reboot /home/ubuntu/rag-sample/embedder/start_server.sh > /home/ubuntu/rag-sample/embedder/embedder.log 2>&1 &') | crontab -
+
+                echo 'Configuration finished.'
+                date '+%Y-%m-%d %H:%M:%S'
+                reboot
